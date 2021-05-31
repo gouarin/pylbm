@@ -211,13 +211,14 @@ class BoundaryMethod:
             if value is not None:
                 indices = np.where(self.ilabel == key)
                 # TODO: check the index in sorder to be the most contiguous
+
                 nspace[0] = indices[0].size
-                k = self.istore[0, indices]
+                k = self.istore[indices, 0]
 
                 s = 1 - self.distance[indices]
                 coords = tuple()
                 for i in range(simulation.domain.dim):
-                    x = simulation.domain.coords_halo[i][self.istore[i + 1, indices]]
+                    x = simulation.domain.coords_halo[i][self.istore[indices, i + 1]]
                     x += s*v[k, i]*simulation.domain.dx
                     x = x.ravel()
                     for j in range(1, simulation.domain.dim): #pylint: disable=unused-variable
@@ -238,7 +239,7 @@ class BoundaryMethod:
                     args += value[1]
 
                 if self.time_bc[key]:
-                    func(f, m, 0, *args)
+                    func(f, m, simulation.m_halo, self.iload, 0, *args)
                 else:
                     func(f, m, *args)
 
@@ -262,7 +263,7 @@ class BoundaryMethod:
         nv = simulation.container.nv
 
         for i in range(len(self.func)):
-            self.func[i](self.f[i], self.m[i], t, *self.args[i])
+            self.func[i](self.f[i], self.m[i], simulation.m_halo, self.iload, t, *self.args[i])
             simulation.equilibrium(self.m[i])
             simulation.m2f(self.m[i], self.f[i])
 
@@ -416,6 +417,7 @@ class BouzidiBounceBack(BoundaryMethod):
     def __init__(self, istore, ilabel, distance, stencil, value_bc, time_bc, nspace, generator):
         super(BouzidiBounceBack, self).__init__(istore, ilabel, distance, stencil, value_bc, time_bc, nspace, generator)
         self.s = np.empty(self.istore.shape[1])
+        self.scale = np.empty(self.istore.shape[1])
 
     def set_iload(self):
         """
@@ -434,6 +436,7 @@ class BouzidiBounceBack(BoundaryMethod):
         iload1[1:, mask] = self.istore[1:, mask] + v[k[mask]].T
         iload2[1:, mask] = self.istore[1:, mask] + 2*v[k[mask]].T
         self.s[mask] = 2.*self.distance[mask]
+        self.scale[mask] = 1.
 
         mask = np.logical_not(mask)
         iload1[0, mask] = ksym[mask]
@@ -441,6 +444,7 @@ class BouzidiBounceBack(BoundaryMethod):
         iload1[1:, mask] = self.istore[1:, mask] + v[k[mask]].T
         iload2[1:, mask] = self.istore[1:, mask] + v[k[mask]].T
         self.s[mask] = .5/self.distance[mask]
+        self.scale[mask] = .5/self.distance[mask]
 
         self.iload.append(iload1)
         self.iload.append(iload2)
@@ -467,6 +471,7 @@ class BouzidiBounceBack(BoundaryMethod):
         rhs = self.rhs
         if hasattr(self, 's'):
             dist = self.s
+            rhs_scale = self.scale
         ncond = istore.shape[0]
         return locals()
 
@@ -497,12 +502,15 @@ class BouzidiBounceBack(BoundaryMethod):
         istore, iload, ncond = self._get_istore_iload_symb(dim)
         rhs, dist = self._get_rhs_dist_symb(ncond)
 
+        rhs_scale = IndexedBase('rhs_scale', [ncond])
+
+        print('coucou')
         idx = Idx(ix, (0, ncond))
         fstore = indexed('f', [ns, nx, ny, nz], index=[istore[idx, k] for k in range(dim+1)], priority=sorder)
         fload0 = indexed('fcopy', [ns, nx, ny, nz], index=[iload[0][idx, k] for k in range(dim+1)], priority=sorder)
         fload1 = indexed('fcopy', [ns, nx, ny, nz], index=[iload[1][idx, k] for k in range(dim+1)], priority=sorder)
 
-        self.generator.add_routine(('Bouzidi_bounce_back', For(idx, Eq(fstore, dist[idx]*fload0 + (1-dist[idx])*fload1 + rhs[idx]))))
+        self.generator.add_routine(('Bouzidi_bounce_back', For(idx, Eq(fstore, dist[idx]*fload0 + (1-dist[idx])*fload1 + rhs_scale[idx]*rhs[idx]))))
 
     @property
     def function(self):

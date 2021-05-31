@@ -154,8 +154,8 @@ class Simulation:
         # Initialize the solution and the rhs of boundary conditions
         self.initialization()
         for method in self.bc.methods:
-            method.prepare_rhs(self)
             method.fix_iload()
+            method.prepare_rhs(self)
             method.set_rhs()
             method.move2gpu()
         self._need_init = False
